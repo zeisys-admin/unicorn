@@ -1,0 +1,204 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "Creates a static website using S3 for the Wild Rydes serverless web application workshop",
+    "Parameters": {
+        "BucketName": {
+            "Type": "String",
+            "Description": "The name for the bucket hosting your website, e.g. 'wildrydes-yourname'"
+        },
+        "S3CopyRoleARN": {
+            "Type": "String",
+            "Description": "ARN of the role with permissions to copy files into S3 buckets"
+        },
+        "CodeBucket": {
+            "Type": "String",
+            "Default": "wildrydes-us-east-1",
+            "Description": "S3 bucket containing the code deployed by this template"
+        },
+        "CodeKeyPrefix": {
+            "Type": "String",
+            "Default": "WebApplication/1_StaticWebHosting",
+            "Description": "Key prefix for resources referenced from the CodeBucket"
+        }
+    },
+    "Metadata": {
+        "AWS::CloudFormation::Interface": {
+            "ParameterGroups": [
+                {
+                    "Label": {
+                        "default": "Website Configuration"
+                    },
+                    "Parameters": [
+                        "BucketName"
+                    ]
+                },
+                {
+                    "Label": {
+                        "default": "Advanced Configuration"
+                    },
+                    "Parameters": [
+                        "CodeBucket",
+                        "CodeKeyPrefix"
+                    ]
+                }
+            ],
+            "ParameterLabels": {
+                "BucketName": {
+                    "default": "Website Bucket Name"
+                }
+            }
+        },
+        "AWS::CloudFormation::Designer": {
+            "91f94936-2566-4815-a196-238dba5ad165": {
+                "size": {
+                    "width": 60,
+                    "height": 60
+                },
+                "position": {
+                    "x": 180,
+                    "y": 90
+                },
+                "z": 1,
+                "embeds": []
+            },
+            "77b0c943-615f-4739-a318-d0ca93a83630": {
+                "size": {
+                    "width": 60,
+                    "height": 60
+                },
+                "position": {
+                    "x": 60,
+                    "y": 210
+                },
+                "z": 1,
+                "embeds": []
+            },
+            "09a0348c-33b1-4682-991b-5dc94ea38bc7": {
+                "size": {
+                    "width": 60,
+                    "height": 60
+                },
+                "position": {
+                    "x": 180,
+                    "y": 210
+                },
+                "z": 1,
+                "embeds": []
+            },
+            "943cf3b1-0f9e-4434-9fcd-caa861f38953": {
+                "size": {
+                    "width": 60,
+                    "height": 60
+                },
+                "position": {
+                    "x": 300,
+                    "y": 90
+                },
+                "z": 1,
+                "embeds": [],
+                "isassociatedwith": [
+                    "77b0c943-615f-4739-a318-d0ca93a83630"
+                ]
+            }
+        }
+    },
+    "Resources": {
+        "WebsiteBucket": {
+            "Properties": {
+                "BucketName": {
+                    "Ref": "BucketName"
+                },
+                "WebsiteConfiguration": {
+                    "IndexDocument": "index.html"
+                }
+            },
+            "Type": "AWS::S3::Bucket",
+            "Metadata": {
+                "AWS::CloudFormation::Designer": {
+                    "id": "77b0c943-615f-4739-a318-d0ca93a83630"
+                }
+            }
+        },
+        "WebsiteBucketPolicy": {
+            "Properties": {
+                "Bucket": {
+                    "Ref": "WebsiteBucket"
+                },
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": "*",
+                            "Action": "s3:GetObject",
+                            "Resource": {
+                                "Fn::Sub": "arn:aws:s3:::${WebsiteBucket}/*"
+                            }
+                        }
+                    ]
+                }
+            },
+            "Type": "AWS::S3::BucketPolicy",
+            "Metadata": {
+                "AWS::CloudFormation::Designer": {
+                    "id": "943cf3b1-0f9e-4434-9fcd-caa861f38953"
+                }
+            }
+        },
+        "WebsiteContent": {
+            "Properties": {
+                "ServiceToken": {
+                    "Fn::GetAtt": [
+                        "CopyS3ObjectsFunction",
+                        "Arn"
+                    ]
+                },
+                "SourceBucket": {
+                    "Ref": "CodeBucket"
+                },
+                "SourcePrefix": {
+                    "Fn::Sub": "${CodeKeyPrefix}/website/"
+                },
+                "Bucket": {
+                    "Ref": "WebsiteBucket"
+                }
+            },
+            "Type": "Custom::S3Objects",
+            "Metadata": {
+                "AWS::CloudFormation::Designer": {
+                    "id": "09a0348c-33b1-4682-991b-5dc94ea38bc7"
+                }
+            }
+        },
+        "CopyS3ObjectsFunction": {
+            "Properties": {
+                "Description": "Copies objects from a source S3 bucket to a destination",
+                "Handler": "index.handler",
+                "Runtime": "python2.7",
+                "Role": {
+                    "Ref": "S3CopyRoleARN"
+                },
+                "Timeout": 120,
+                "Code": {
+                    "ZipFile": "import os\nimport json\nimport cfnresponse\n\nimport boto3\nfrom botocore.exceptions import ClientError\nclient = boto3.client('s3')\n\nimport logging\nlogger = logging.getLogger()\nlogger.setLevel(logging.INFO)\n\ndef handler(event, context):\n  logger.info(\"Received event: %s\" % json.dumps(event))\n  source_bucket = event['ResourceProperties']['SourceBucket']\n  source_prefix = event['ResourceProperties'].get('SourcePrefix') or ''\n  bucket = event['ResourceProperties']['Bucket']\n  prefix = event['ResourceProperties'].get('Prefix') or ''\n\n  result = cfnresponse.SUCCESS\n\n  try:\n    if event['RequestType'] == 'Create' or event['RequestType'] == 'Update':\n      result = copy_objects(source_bucket, source_prefix, bucket, prefix)\n    elif event['RequestType'] == 'Delete':\n      result = delete_objects(bucket, prefix)\n  except ClientError as e:\n    logger.error('Error: %s', e)\n    result = cfnresponse.FAILED\n\n  cfnresponse.send(event, context, result, {})\n\n\ndef copy_objects(source_bucket, source_prefix, bucket, prefix):\n  paginator = client.get_paginator('list_objects_v2')\n  page_iterator = paginator.paginate(Bucket=source_bucket, Prefix=source_prefix)\n  for key in {x['Key'] for page in page_iterator for x in page['Contents']}:\n    dest_key = os.path.join(prefix, os.path.relpath(key, source_prefix))\n    if not key.endswith('/'):\n      print 'copy {} to {}'.format(key, dest_key)\n      client.copy_object(CopySource={'Bucket': source_bucket, 'Key': key}, Bucket=bucket, Key = dest_key)\n  return cfnresponse.SUCCESS\n\ndef delete_objects(bucket, prefix):\n  paginator = client.get_paginator('list_objects_v2')\n  page_iterator = paginator.paginate(Bucket=bucket, Prefix=prefix)\n  objects = [{'Key': x['Key']} for page in page_iterator for x in page['Contents']]\n  client.delete_objects(Bucket=bucket, Delete={'Objects': objects})\n  return cfnresponse.SUCCESS\n"
+                }
+            },
+            "Type": "AWS::Lambda::Function",
+            "Metadata": {
+                "AWS::CloudFormation::Designer": {
+                    "id": "91f94936-2566-4815-a196-238dba5ad165"
+                }
+            }
+        }
+    },
+    "Outputs": {
+        "WebsiteURL": {
+            "Value": {
+                "Fn::GetAtt": [
+                    "WebsiteBucket",
+                    "WebsiteURL"
+                ]
+            }
+        }
+    }
+}
